@@ -1,40 +1,3 @@
-/*********************************************************************
-*
-* Software License Agreement (BSD License)
-*
-*  Copyright (c) 2014, ISR University of Coimbra.
-*  All rights reserved.
-*
-*  Redistribution and use in source and binary forms, with or without
-*  modification, are permitted provided that the following conditions
-*  are met:
-*
-*   * Redistributions of source code must retain the above copyright
-*     notice, this list of conditions and the following disclaimer.
-*   * Redistributions in binary form must reproduce the above
-*     copyright notice, this list of conditions and the following
-*     disclaimer in the documentation and/or other materials provided
-*     with the distribution.
-*   * Neither the name of the ISR University of Coimbra nor the names of its
-*     contributors may be used to endorse or promote products derived
-*     from this software without specific prior written permission.
-*
-*  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-*  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-*  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-*  FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-*  COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-*  INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-*  BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-*  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-*  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-*  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-*  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-*  POSSIBILITY OF SUCH DAMAGE.
-*
-* Author: David Portugal (2011-2014), and Luca Iocchi (2014-2016)
-*********************************************************************/
-
 #include <sstream>
 #include <string>
 #include <ros/ros.h>
@@ -120,6 +83,7 @@ void PatrolAgent::init(int argc, char** argv) {
     communication_delay = 0.0;
     lost_message_rate = 0.0;
     goal_reached_wait = 0.0;
+    goal_reached_count = 0;
     /* Define Starting Vertex/Position (Launch File Parameters) */
 
     ros::init(argc, argv, "patrol_agent");  // will be replaced by __name:=XXXXXX
@@ -273,7 +237,7 @@ void PatrolAgent::run() {
     //initially clear the costmap (to make sure the robot is not trapped):
     std_srvs::Empty srv;
     std::string mb_string;
-     
+     getRobotPose(ID_ROBOT,x_old,y_old,th);
      if (ID_ROBOT>-1){
              std::ostringstream id_string;
              id_string << ID_ROBOT;
@@ -338,13 +302,21 @@ void PatrolAgent::run() {
 
 void PatrolAgent::onGoalComplete()
 {
-    if(next_vertex>-1) {
-        //Update Idleness Table:
-        update_idleness();
-        current_vertex = next_vertex;       
-    }
+
+
     
-    //devolver proximo vertex tendo em conta apenas as idlenesses;
+    if( battery <= 20 ) {
+    next_vertex = ID_ROBOT;
+    send_goal_reached(); // Send TARGET to monitor
+    send_results();
+    ROS_INFO("Sending to charging dock at (15, 23.8)\n");
+    sendToDock(15, 23.8); //Location of a single dock charging station
+    goal_complete = false;
+    charged = false;
+   } 
+    else {
+    
+    //return next vertex only taking into account the idlenesses;
     next_vertex = compute_next_vertex();
     //printf("Move Robot to Vertex %d (%f,%f)\n", next_vertex, vertex_web[next_vertex].x, vertex_web[next_vertex].y);
 
@@ -357,8 +329,9 @@ void PatrolAgent::onGoalComplete()
     //sendGoal(vertex_web[next_vertex].x, vertex_web[next_vertex].y);  
     sendGoal(next_vertex);  // send to move_base
     
-    goal_complete = false;    
+    goal_complete = false; }   
 }
+
 
 void PatrolAgent::onGoalNotComplete()
 {   
@@ -512,6 +485,25 @@ void PatrolAgent::sendGoal(int next_vertex)
     ac->sendGoal(goal, boost::bind(&PatrolAgent::goalDoneCallback, this, _1, _2), boost::bind(&PatrolAgent::goalActiveCallback,this), boost::bind(&PatrolAgent::goalFeedbackCallback, this,_1));  
 }
 
+void PatrolAgent::sendToDock(double x_axis, double y_axis) 
+{
+    goal_canceled_by_user = false;
+    
+    double target_x = x_axis, 
+           target_y = y_axis;
+    
+    //Define Goal:
+    move_base_msgs::MoveBaseGoal goal;
+    //Send the goal to the robot (Global Map)
+    geometry_msgs::Quaternion angle_quat = tf::createQuaternionMsgFromYaw(0.0);     
+    goal.target_pose.header.frame_id = "map"; 
+    goal.target_pose.header.stamp = ros::Time::now();    
+    goal.target_pose.pose.position.x = target_x; // vertex_web[current_vertex].x;
+    goal.target_pose.pose.position.y = target_y; // vertex_web[current_vertex].y;  
+    goal.target_pose.pose.orientation = angle_quat; //doesn't matter really.
+    ac->sendGoal(goal, boost::bind(&PatrolAgent::goalDoneCallback, this, _1, _2), boost::bind(&PatrolAgent::goalActiveCallback,this), boost::bind(&PatrolAgent::goalFeedbackCallback, this,_1));  
+}
+
 void PatrolAgent::cancelGoal() 
 {
     goal_canceled_by_user = true;
@@ -524,15 +516,40 @@ void PatrolAgent::goalDoneCallback(const actionlib::SimpleClientGoalState &state
     // If the goal succeeded send a new one!
     //if(state.state_ == actionlib::SimpleClientGoalState::SUCCEEDED) sendNewGoal = true;
     // If it was aborted time to back up!
-    //if(state.state_ == actionlib::SimpleClientGoalState::ABORTED) needToBackUp = true;    
-    
-    if(state.state_ == actionlib::SimpleClientGoalState::SUCCEEDED){
+    //if(state.state_ == actionlib::SimpleClientGoalState::ABORTED) needToBackUp = true; 
+    float x_new,y_new;
+    getRobotPose(ID_ROBOT,x_new,y_new,th);
+    if(next_vertex>-1) 
+      {
+        update_idleness();
+        current_vertex = next_vertex;       
+       }
+   
+    if(state.state_ == actionlib::SimpleClientGoalState::SUCCEEDED && charged == false){
+        ROS_INFO("Charging dock reached ... WAITING %.2f sec",4.0);
+        ros::Duration delay(4.0); // wait 4 seconds to charge
+        delay.sleep();
+        ROS_INFO("Charging ... DONE");
+        battery = 100;
+        ROS_INFO("battery = %u \n", battery); //show that the battery is fully charged
+        goal_complete = true;
+        charged = true;
+    }
+else{
+    if (state.state_ == actionlib::SimpleClientGoalState::SUCCEEDED){
         ROS_INFO("Goal reached ... WAITING %.2f sec",goal_reached_wait);
         ros::Duration delay(goal_reached_wait); // wait after goal is reached
         delay.sleep();
+        distance_covered = sqrt(pow((x_new - x_old),2)+pow((y_new - y_old),2)); //the distance covered is current position - previous position
+	battery_consumed = 0.5*distance_covered; //the amount of battery consumed is half the value of distance covered
+        battery = battery - battery_consumed;  //Update battery
+        x_old = x_new;                         
+        y_old = y_new;                         //store current location as previous location 
         ROS_INFO("Goal reached ... DONE");
-        goal_complete = true;
-    }else{
+        ROS_INFO("battery = %u \n", battery);  //display the updated battery info
+        goal_complete = true;    
+    }
+else{
         aborted_count++;
         ROS_INFO("CANCELLED or ABORTED... %d",aborted_count);   //tentar voltar a enviar goal..
         if (!goal_canceled_by_user) {
@@ -563,6 +580,7 @@ void PatrolAgent::goalDoneCallback(const actionlib::SimpleClientGoalState &state
 
             ROS_INFO("Resend Goal!");
             ResendGoal = true;
+         }
         }
     }
 }
@@ -599,7 +617,7 @@ void PatrolAgent::send_goal_reached() {
     ros::spinOnce();  
 }
 
-bool PatrolAgent::check_interference (int robot_id){ //verificar se os robots estao proximos
+bool PatrolAgent::check_interference (int robot_id){ //verificar se os robots estao proximos (check if the robots are close)
     
     int i;
     double dist_quad;
@@ -608,7 +626,7 @@ bool PatrolAgent::check_interference (int robot_id){ //verificar se os robots es
         return false; // false if within 10 seconds from the last one
     
     /* Poderei usar TEAMSIZE para afinar */
-    for (i=0; i<robot_id; i++){ //percorrer vizinhos (assim asseguro q cada interferencia é so encontrada 1 vez)
+    for (i=0; i<robot_id; i++){ // walk around neighbors (so as to make sure that each interference is found only once)
         
         dist_quad = (xPos[i] - xPos[robot_id])*(xPos[i] - xPos[robot_id]) + (yPos[i] - yPos[robot_id])*(yPos[i] - yPos[robot_id]);
         

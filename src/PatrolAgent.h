@@ -1,39 +1,3 @@
-/*********************************************************************
-*
-* Software License Agreement (BSD License)
-*
-*  Copyright (c) 2014, ISR University of Coimbra.
-*  All rights reserved.
-*
-*  Redistribution and use in source and binary forms, with or without
-*  modification, are permitted provided that the following conditions
-*  are met:
-*
-*   * Redistributions of source code must retain the above copyright
-*     notice, this list of conditions and the following disclaimer.
-*   * Redistributions in binary form must reproduce the above
-*     copyright notice, this list of conditions and the following
-*     disclaimer in the documentation and/or other materials provided
-*     with the distribution.
-*   * Neither the name of the ISR University of Coimbra nor the names of its
-*     contributors may be used to endorse or promote products derived
-*     from this software without specific prior written permission.
-*
-*  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-*  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-*  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-*  FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-*  COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-*  INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-*  BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-*  LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-*  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-*  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-*  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-*  POSSIBILITY OF SUCH DAMAGE.
-*
-* Author: Luca Iocchi (2014-2016)
-*********************************************************************/
 
 #include <sstream>
 #include <string>
@@ -72,9 +36,15 @@ protected:
     std::string graph_file, mapname;
     uint dimension; // Graph Dimension
     uint current_vertex; // current vertex
+    uint distance_covered, battery, battery_consumed;
+    float x_old;
+    float y_old;
+    float th;
+    double x_axis, y_axis;
     bool ResendGoal; // Send the same goal again (if goal failed...)
     bool interference;
     double last_interference;
+    bool charged;
     bool goal_complete;
     bool initialize;
     bool end_simulation;
@@ -87,7 +57,7 @@ protected:
     bool goal_canceled_by_user;
     double goal_reached_wait, communication_delay, last_communication_delay_time, lost_message_rate;
     std::string initial_positions;
-    int aborted_count, resend_goal_count;
+    int aborted_count, resend_goal_count, goal_reached_count;
     
     MoveBaseClient *ac; // action client for reaching target goals
     
@@ -103,9 +73,13 @@ public:
     PatrolAgent() { 
         listener=NULL;
         next_vertex = -1;
+        distance_covered = 0;
+        battery_consumed =0;
+        battery = 100;
         initialize = true;
         end_simulation = false;
         ac = NULL;
+        charged = true;
     }
     
     virtual void init(int argc, char** argv);
@@ -113,19 +87,19 @@ public:
     void initialize_node();
     void readParams(); // read ROS parameters
     void update_idleness();  // local idleness
-    
     virtual void run();
     
     void getRobotPose(int robotid, float &x, float &y, float &theta);
     void odomCB(const nav_msgs::Odometry::ConstPtr& msg);
     
     void sendGoal(int next_vertex);
+    void sendToDock(double x_axis, double y_axis);
     void cancelGoal();
     
     void goalDoneCallback(const actionlib::SimpleClientGoalState &state, const move_base_msgs::MoveBaseResultConstPtr &result);
     void goalActiveCallback();
     void goalFeedbackCallback(const move_base_msgs::MoveBaseFeedbackConstPtr &feedback);
-
+    void updateDijkstra();
     
     void send_goal_reached();
     bool check_interference (int ID_ROBOT);
@@ -152,5 +126,4 @@ public:
     virtual int compute_next_vertex() = 0;
 
 };
-
 
